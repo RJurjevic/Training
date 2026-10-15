@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -139,6 +139,72 @@ namespace Training
 
             return samples;
         }
+        // Display only: checkpoint selection still uses GetTrendSupportedSample.
+        // A 2,000-epoch neighbourhood, local linear fits and two robust reweightings.
+        private static double[] SmoothDisplayLoss(List<Sample> samples)
+        {
+            int n = samples.Count;
+            double[] result = new double[n];
+            double[] robust = Enumerable.Repeat(1.0, n).ToArray();
+            int[] left = new int[n], right = new int[n];
+            for (int i = 0; i < n; i++)
+            {
+                int lo = i, hi = i;
+                while (lo > 0 && (double)samples[i].Epoch - samples[lo - 1].Epoch <= 1000.0) lo--;
+                while (hi + 1 < n && (double)samples[hi + 1].Epoch - samples[i].Epoch <= 1000.0) hi++;
+                // Keep a usable fit when records are sparse, including at endpoints.
+                while (hi - lo + 1 < Math.Min(5, n))
+                {
+                    if (lo > 0 && (hi == n - 1 ||
+                        (double)samples[i].Epoch - samples[lo - 1].Epoch <=
+                        (double)samples[hi + 1].Epoch - samples[i].Epoch)) lo--;
+                    else hi++;
+                }
+                left[i] = lo; right[i] = hi;
+            }
+            for (int pass = 0; pass < 3; pass++)
+            {
+                for (int i = 0; i < n; i++)
+                {
+                    double h = Math.Max(1000.0, Math.Max(
+                        (double)samples[i].Epoch - samples[left[i]].Epoch,
+                        (double)samples[right[i]].Epoch - samples[i].Epoch)) * 1.000001;
+                    double s0 = 0, s1 = 0, s2 = 0, v0 = 0, v1 = 0;
+                    // Retry with distance weights if robust weights reject the whole neighbourhood.
+                    for (int attempt = 0; attempt < 2; attempt++)
+                    {
+                        s0 = s1 = s2 = v0 = v1 = 0;
+                        for (int j = left[i]; j <= right[i]; j++)
+                        {
+                            double z = ((double)samples[j].Epoch - samples[i].Epoch) / h;
+                            double u = 1.0 - Math.Pow(Math.Abs(z), 3);
+                            double w = u * u * u * (attempt == 0 ? robust[j] : 1.0);
+                            // Centre loss too, avoiding cancellation in nearly flat late training.
+                            double y = samples[j].ValidLoss - samples[i].ValidLoss;
+                            s0 += w; s1 += w * z; s2 += w * z * z;
+                            v0 += w * y; v1 += w * z * y;
+                        }
+                        if (s0 > 1e-12) break;
+                    }
+                    double det = s0 * s2 - s1 * s1;
+                    result[i] = samples[i].ValidLoss + (det > 1e-12 * s0 * s2
+                        ? (s2 * v0 - s1 * v1) / det : (s0 > 0 ? v0 / s0 : 0));
+                }
+                if (pass == 2) break;
+                double[] residuals = Enumerable.Range(0, n)
+                    .Select(i => Math.Abs(samples[i].ValidLoss - result[i])).OrderBy(x => x).ToArray();
+                double median = n % 2 == 0 ? (residuals[n / 2 - 1] + residuals[n / 2]) / 2 : residuals[n / 2];
+                if (median <= 1e-14) break;
+                for (int i = 0; i < n; i++)
+                {
+                    double u = Math.Abs(samples[i].ValidLoss - result[i]) / (6 * median);
+                    robust[i] = u >= 1 ? 0 : Math.Pow(1 - u * u, 2);
+                }
+            }
+            return result;
+        }
+
+
         private static Sample GetTrendSupportedSample(List<Sample> samples, int smoothWindow)
         {
             if (samples == null || samples.Count == 0)
@@ -328,10 +394,18 @@ namespace Training
             sb.Append(smoothWindow.ToString(CultureInfo.InvariantCulture));
             sb.AppendLine(";");
 
-            sb.AppendLine("vlossSmooth = Transpose[{");
-            sb.AppendLine("  MovingAverage[vloss[[All, 1]], smoothWindow],");
-            sb.AppendLine("  MovingAverage[vloss[[All, 2]], smoothWindow]");
-            sb.AppendLine("}];");
+            // The display smoother is independent of the existing adoption rule.
+            double[] displayLoss = SmoothDisplayLoss(samples);
+            sb.AppendLine("vlossSmooth = {");
+            for (int i = 0; i < samples.Count; i++)
+            {
+                sb.Append("  {");
+                sb.Append(samples[i].Epoch.ToString(CultureInfo.InvariantCulture));
+                sb.Append(", ");
+                sb.Append(displayLoss[i].ToString("R", CultureInfo.InvariantCulture).Replace("E", "*^").Replace("e", "*^"));
+                sb.AppendLine(i + 1 == samples.Count ? "}" : "},");
+            }
+            sb.AppendLine("};");
 
             sb.AppendLine("p1Fit = ListLinePlot[");
             sb.AppendLine("  vlossSmooth,");
