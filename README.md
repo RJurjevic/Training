@@ -42,7 +42,7 @@ Training.exe 15000.txt
 For example, from the Release build directory:
 
 ```bat
-Training.exe "C:\Users\Hostmaster\OneDrive\Chess\20050.txt"
+Training.exe "C:\TrainingLogs\training.txt"
 ```
 
 The utility writes `plot_progress.wl` beside the input log, replacing an existing file of that name. It prints the number of parsed samples and the output path.
@@ -50,7 +50,7 @@ The utility writes `plot_progress.wl` beside the input log, replacing an existin
 In Mathematica, evaluate:
 
 ```mathematica
-Get["C:/Users/Hostmaster/OneDrive/Chess/plot_progress.wl"]
+Get["C:/TrainingLogs/plot_progress.wl"]
 ```
 
 The script opens a notebook containing the plots and saves it as `plot_progress.nb` in the script's directory. The executable generates the script; Mathematica generates the notebook when the script is evaluated.
